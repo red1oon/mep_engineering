@@ -18,7 +18,7 @@ git clone https://github.com/red1oon/mep_engineering.git
 ```
 
 Restart Blender to load modules.
-Usage
+## Usage
 
 Load federated models (Architecture, Structural, MEP)
 Set routing start/end points
@@ -34,9 +34,9 @@ Documentation: Auto-generated reports
 Part of Bonsai10D Vision
 10-dimensional construction coordination: 3D geometry + time + cost + compliance + ERP integration (iDempiere).
 
-License
+## License
 GPL-3.0-or-later
 
-Author
+## Author
 Redhuan D. Oon (red1), Naquib Danial Oon
 
