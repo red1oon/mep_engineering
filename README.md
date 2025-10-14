@@ -100,6 +100,18 @@ modules = {
 
 ### 1. Preprocess Your Models (One-time)
 
+**Option A: Via Bonsai UI** (Recommended for most users)
+
+1. Open Blender with any IFC project
+2. Go to **Properties → Scene → Quality Control** tab
+3. Expand **"Multi-Model Federation"** panel
+4. Click **"Add File"** for each discipline IFC file
+5. Set **Database Path**: `/path/to/project_federation.db`
+6. Click **"Preprocess Federation"** button
+7. Wait ~7 minutes for completion (progress shown in console)
+
+**Option B: Standalone CLI** (For automation/scripting)
+
 ```bash
 # Extract bounding boxes from discipline IFC files
 cd /path/to/project
@@ -107,8 +119,10 @@ cd /path/to/project
 python federation_preprocessor.py \
   --files ARC.ifc ACMV.ifc STR.ifc ELEC.ifc \
   --output project_federation.db \
-  --disciplines ARC ACMV STR ELEC
+  --disciplines ARC ACMV FP SP STR ELEC
 ```
+
+See [Federation module documentation](https://github.com/red1oon/federation) for detailed CLI usage.
 
 **Output**: SQLite database with spatial index (~50MB for 90K elements)
 
@@ -117,9 +131,7 @@ python federation_preprocessor.py \
 1. Open Blender with your IFC project
 2. Go to **Properties → Scene → Quality Control** tab
 3. Expand **"Multi-Model Federation"** panel
-4. Click **"Add File"** for each discipline IFC
-5. Set **Database Path**: `/path/to/project_federation.db`
-6. Click **"Load Federation Index"**
+4. Click **"Load Federation Index"**
 
 ✅ **Status**: "Federation Active - 93,000 elements from 4 disciplines"
 
