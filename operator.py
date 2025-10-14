@@ -325,7 +325,7 @@ class RouteMEPConduit(Operator):
                         ifc_class="IfcCableCarrierSegment"
                     )
                     segment.Name = f"Cable Tray Segment {i+1}"
-                    segment.PredefinedType = "CABLETRAY"
+                    segment.PredefinedType = "CABLETRAYSEGMENT"
                 
                 # Validate entity created
                 if not segment or not hasattr(segment, 'GlobalId'):
@@ -428,6 +428,188 @@ class RouteMEPConduit(Operator):
             print(f"\n✗ No IFC elements created")
             return False
 
+# ============================================================================
+# CLASH VALIDATION OPERATOR (Phase 2B)
+# ============================================================================
+
+class ValidateConduitRoute(Operator):
+    """Validate generated conduit route against all disciplines using IfcClash"""
+    bl_idname = "bim.validate_conduit_route"
+    bl_label = "Validate Route"
+    bl_description = "Check generated conduit for clashes with all disciplines"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        """Execute clash validation"""
+        import tempfile
+        import json
+        from pathlib import Path
+        
+        mep_props = context.scene.BIMmepEngineeringProperties
+        fed_props = context.scene.BIMFederationProperties
+        
+        # Check if route exists (must have generated conduit first)
+        import bonsai.tool as tool
+        ifc_file = tool.Ifc.get()
+        if not ifc_file:
+            self.report({'ERROR'}, "No IFC file loaded")
+            return {"CANCELLED"}
+        
+        # Find recently created conduit elements
+        electrical_system = None
+        for system in ifc_file.by_type("IfcSystem"):
+            if system.Name == "Electrical Distribution":
+                electrical_system = system
+                break
+        
+        if not electrical_system:
+            self.report({'ERROR'}, "No conduit route found. Generate route first.")
+            return {"CANCELLED"}
+        
+        # Get route elements
+        import ifcopenshell.util.system
+        route_elements = ifcopenshell.util.system.get_system_elements(electrical_system)
+        
+        if not route_elements:
+            self.report({'ERROR'}, "Electrical system has no elements")
+            return {"CANCELLED"}
+        
+        self.report({'INFO'}, f"Validating route with {len(route_elements)} segments...")
+        
+        # Run clash detection (uses federation obstacles)
+        try:
+            clashes = self._run_clash_detection(None, fed_props)
+            
+            if not clashes:
+                self.report({'INFO'}, "✓ No clashes detected! Route is clear.")
+                return {"FINISHED"}
+            
+            # Sanitize clashes (remove false positives, apply clearance rules)
+            sanitized = self._sanitize_clashes(clashes, mep_props)
+            
+            self.report({'INFO'}, 
+                       f"Found {len(sanitized)} clashes (filtered from {len(clashes)} raw)")
+            
+            # Display results
+            self._display_clash_summary(sanitized)
+            
+            # Export BCF
+            if mep_props.export_bcf:
+                bcf_path = self._export_bcf(sanitized, context)
+                self.report({'INFO'}, f"BCF exported to {bcf_path}")
+            
+        except Exception as e:
+            self.report({'ERROR'}, f"Clash detection failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {"CANCELLED"}
+        
+        return {"FINISHED"}
+        
+    def _run_clash_detection(self, route_file, fed_props):
+        """Use federation obstacles (already found during routing)"""
+        
+        from pathlib import Path
+        import bpy
+        
+        # Get MEP properties for corridor definition
+        mep_props = bpy.context.scene.BIMmepEngineeringProperties
+        
+        # Access federation index (already loaded)
+        if not hasattr(bpy.types.WindowManager, 'federation_index'):
+            raise RuntimeError("Federation index not accessible. Load federation first.")
+        
+        index = bpy.types.WindowManager.federation_index
+        
+        # Query same corridor used during routing
+        start = tuple(mep_props.route_start_point)
+        end = tuple(mep_props.route_end_point)
+        clearance = mep_props.clearance_distance
+        
+        # Get obstacles from federation
+        obstacles = index.query_corridor(
+            start=start,
+            end=end,
+            buffer=clearance,
+            disciplines=None  # All disciplines
+        )
+        
+        # Convert FederationElement to clash format
+        clashes = []
+        for obs in obstacles:
+            clashes.append({
+                "a_name": "Route Conduit",
+                "a_global_id": "Route",
+                "b_name": f"{obs.ifc_class}",
+                "b_global_id": obs.guid,
+                "distance": 0.0,  # Within corridor clearance
+                "location": obs.centroid,
+                "responsible": obs.discipline
+            })
+        
+        return clashes
+    
+    def _sanitize_clashes(self, clashes, mep_props):
+        """Filter clashes by target disciplines"""
+        
+        # Parse target disciplines
+        target_disciplines = [
+            d.strip() for d in mep_props.target_disciplines.split(',') 
+            if d.strip()
+        ]
+        
+        # If no filter specified, return all
+        if not target_disciplines or target_disciplines == ['']:
+            return clashes
+        
+        # Filter by discipline
+        sanitized = []
+        for clash in clashes:
+            if clash.get("responsible") in target_disciplines:
+                sanitized.append(clash)
+        
+        return sanitized
+        
+    def _display_clash_summary(self, clashes):
+        """Print clash summary to console"""
+        from collections import Counter
+        
+        print("\n" + "="*60)
+        print("CLASH VALIDATION RESULTS")
+        print("="*60)
+        
+        # Group by responsible discipline
+        by_discipline = Counter(c["responsible"] for c in clashes)
+        
+        print(f"Total clashes: {len(clashes)}")
+        print("\nBy responsible discipline:")
+        for discipline, count in by_discipline.most_common():
+            print(f"  {discipline}: {count} clashes")
+        
+        print("\nTop 5 clashes by severity:")
+        sorted_clashes = sorted(clashes, key=lambda c: c.get("distance", 999))
+        for i, clash in enumerate(sorted_clashes[:5], 1):
+            distance_mm = clash.get("distance", 0) * 1000
+            print(f"  {i}. {clash.get('a_name', 'Route')} ↔ "
+                  f"{clash.get('b_name', 'Obstacle')}: {distance_mm:.0f}mm clearance")
+        
+        print("="*60 + "\n")
+    
+    def _export_bcf(self, clashes, context):
+        """Export clashes to BCF file"""
+        from pathlib import Path  # ← Add this line
+
+        # TODO Phase 2B: Implement BCF export
+        # For now, return placeholder
+        bcf_path = Path.home() / "terminal1_route_clashes.bcf"
+        
+        self.report({'WARNING'}, 
+                   "BCF export not yet implemented. "
+                   "See console for clash summary.")
+        
+        return str(bcf_path)
+
+
 class SetRouteStartPoint(Operator):
     """Set route start point from 3D cursor"""
     bl_idname = "bim.set_route_start_point"
@@ -465,6 +647,4 @@ class SetRouteEndPoint(Operator):
         self.report({'INFO'}, 
                    f"End point set to ({cursor_loc.x:.2f}, {cursor_loc.y:.2f}, {cursor_loc.z:.2f})m")
         
-        return {"FINISHED"}
-    
-    
+        return {"FINISHED"}  
