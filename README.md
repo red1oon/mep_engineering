@@ -173,7 +173,7 @@ See [Federation module documentation](https://github.com/red1oon/federation) for
 
 ---
 
-## 💡 Features in Detail
+## 💡 Features Wish List
 
 ### Automated Routing
 - **Obstacle Detection**: Uses federation spatial queries to identify conflicts
