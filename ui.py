@@ -13,6 +13,8 @@ class BIM_PT_mep_engineering(Panel):
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "scene"
+    bl_parent_id = "BIM_PT_tab_quality_control"  # ← Check this line
+
     # bl_parent_id = "BIM_PT_tab_geometric_relationships"  # Commented out for testing
     
     def draw(self, context):
@@ -83,6 +85,29 @@ class BIM_PT_mep_engineering(Panel):
         fed_props = context.scene.BIMFederationProperties
         row.enabled = fed_props.index_loaded
         row.operator("bim.route_mep_conduit", text="Route Conduit", icon='ANIM')
+        
+        if not fed_props.index_loaded:
+            box.label(text="⚠ Load Federation Index first", icon='ERROR')
+
+        # ================================================================
+        # VALIDATION SECTION (Phase 2B)
+        # ================================================================
+        layout.separator()
+        
+        box = layout.box()
+        box.label(text="Clash Validation", icon='CHECKMARK')
+        
+        row = box.row()
+        row.prop(props, "export_bcf")
+        
+        row = box.row()
+        row.prop(props, "show_clash_details")
+        
+        # Validate button
+        row = box.row()
+        row.scale_y = 1.5
+        row.enabled = fed_props.index_loaded
+        row.operator("bim.validate_conduit_route", text="Validate Route", icon='CHECKMARK')
         
         if not fed_props.index_loaded:
             box.label(text="⚠ Load Federation Index first", icon='ERROR')

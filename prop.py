@@ -79,3 +79,19 @@ class BIMmepEngineeringProperties(PropertyGroup):
         description="Comma-separated list of disciplines to check for obstacles (e.g., 'STR,ACMV,ARC')",
         default="STR,ACMV,ARC,FP,SP,CW"
     )
+
+    # ============================================================================
+    # VALIDATION PROPERTIES (Phase 2B)
+    # ============================================================================
+    
+    export_bcf: BoolProperty(
+        name="Export BCF",
+        description="Export clash results to BCF file for Navisworks",
+        default=True
+    )
+    
+    show_clash_details: BoolProperty(
+        name="Show Clash Details",
+        description="Display detailed clash information in console",
+        default=True
+    )

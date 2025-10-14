@@ -18,6 +18,7 @@ classes = (
     operator.RouteMEPConduit,
     operator.SetRouteStartPoint,
     operator.SetRouteEndPoint,
+    operator.ValidateConduitRoute,
     ui.BIM_PT_mep_engineering,
 )
 

@@ -86,10 +86,11 @@ class RouteMEPConduit(Operator):
         
         # Query obstacles along corridor
         try:
+            # Fixed (convert meters to millimeters):
             obstacles = index.query_corridor(
                 start=start,
                 end=end,
-                buffer=clearance,
+                buffer=clearance,  # Buffer is in same units as coordinates (meters)
                 disciplines=disciplines if disciplines else None
             )
             
@@ -150,71 +151,85 @@ class RouteMEPConduit(Operator):
     
     def _route_orthogonal(self, start, end, obstacles, clearance):
         """
-        Simple orthogonal pathfinding (Manhattan distance)
-        Phase 1: Direct route with obstacle avoidance
+        Manhattan-style orthogonal pathfinding
+        Tries 6 different axis permutations (XYZ, XZY, YXZ, YZX, ZXY, ZYX)
+        Returns first path that clears obstacles, or None if all blocked
         """
-        import math
-        # TEMPORARY: Force direct route for testing
-        return [start, end]
-        waypoints = [start]
-        current = start
-        target = end
+        from itertools import permutations
         
-        # Simple 3-segment orthogonal route: horizontal → vertical → horizontal
-        # This is a simplified approach - Phase 2 will add proper A*
+        # Try direct path first (fastest)
+        if self._is_path_clear(start, end, obstacles, clearance):
+            return [start, end]
         
-        # Calculate midpoint
-        mid_x = (current[0] + target[0]) / 2
-        mid_y = (current[1] + target[1]) / 2
+        # Define axis indices: 0=X, 1=Y, 2=Z
+        axes = [0, 1, 2]
         
-        # Check if direct route is clear
-        if self._is_path_clear(current, target, obstacles, clearance):
-            # Direct route possible
-            waypoints.append(target)
-            return waypoints
+        # Try all 6 axis permutations
+        for axis_order in permutations(axes):
+            waypoints = self._generate_orthogonal_path(start, end, axis_order)
+            
+            # Validate all segments clear
+            path_clear = True
+            for i in range(len(waypoints) - 1):
+                if not self._is_path_clear(waypoints[i], waypoints[i+1], obstacles, clearance):
+                    path_clear = False
+                    break
+            
+            if path_clear:
+                return waypoints
         
-        # Try 3-segment route: X → Y → Z
-        segment1 = (target[0], current[1], current[2])  # Move in X
-        segment2 = (target[0], target[1], current[2])   # Move in Y
-        segment3 = target                                # Move in Z
+        # All permutations blocked - try with vertical offset
+        offset = clearance * 2.0
+        for sign in [1, -1]:  # Try both up and down
+            for axis_order in permutations(axes):
+                # Create intermediate point with vertical offset
+                mid_point = list(start)
+                mid_point[2] += sign * offset  # Offset in Z
+                mid_point = tuple(mid_point)
+                
+                # Try path: start -> mid_point -> end
+                waypoints = [start, mid_point]
+                
+                # Generate path from mid_point to end
+                remaining_path = self._generate_orthogonal_path(mid_point, end, axis_order)
+                waypoints.extend(remaining_path[1:])  # Skip duplicate mid_point
+                
+                # Validate segments
+                path_clear = True
+                for i in range(len(waypoints) - 1):
+                    if not self._is_path_clear(waypoints[i], waypoints[i+1], obstacles, clearance):
+                        path_clear = False
+                        break
+                
+                if path_clear:
+                    return waypoints
         
-        # Check each segment
-        if (self._is_path_clear(current, segment1, obstacles, clearance) and
-            self._is_path_clear(segment1, segment2, obstacles, clearance) and
-            self._is_path_clear(segment2, segment3, obstacles, clearance)):
-            waypoints.extend([segment1, segment2, segment3])
-            return waypoints
-        
-        # Try alternative: Y → X → Z
-        segment1_alt = (current[0], target[1], current[2])  # Move in Y
-        segment2_alt = (target[0], target[1], current[2])   # Move in X
-        segment3_alt = target                                # Move in Z
-        
-        if (self._is_path_clear(current, segment1_alt, obstacles, clearance) and
-            self._is_path_clear(segment1_alt, segment2_alt, obstacles, clearance) and
-            self._is_path_clear(segment2_alt, segment3_alt, obstacles, clearance)):
-            waypoints.extend([segment1_alt, segment2_alt, segment3_alt])
-            return waypoints
-        
-        # Try with offset (avoid obstacle by going around)
-        offset = clearance * 2
-        
-        # Offset in Y direction
-        segment1_off = (mid_x, current[1] + offset, current[2])
-        segment2_off = (mid_x, target[1] + offset, current[2])
-        segment3_off = (target[0], target[1] + offset, current[2])
-        segment4_off = target
-        
-        if (self._is_path_clear(current, segment1_off, obstacles, clearance) and
-            self._is_path_clear(segment1_off, segment2_off, obstacles, clearance) and
-            self._is_path_clear(segment2_off, segment3_off, obstacles, clearance) and
-            self._is_path_clear(segment3_off, segment4_off, obstacles, clearance)):
-            waypoints.extend([segment1_off, segment2_off, segment3_off, segment4_off])
-            return waypoints
-        
-        # No clear path found
+        # No valid path found
         return None
     
+    def _generate_orthogonal_path(self, start, end, axis_order):
+        """
+        Generate orthogonal waypoints following specified axis order
+        
+        Args:
+            start: (x, y, z) starting point
+            end: (x, y, z) ending point
+            axis_order: tuple like (0, 1, 2) for X->Y->Z or (1, 2, 0) for Y->Z->X
+            
+        Returns:
+            List of waypoints forming orthogonal path
+        """
+        waypoints = [start]
+        current = list(start)
+        target = list(end)
+        
+        # Move along each axis in specified order
+        for axis in axis_order:
+            if current[axis] != target[axis]:
+                current[axis] = target[axis]
+                waypoints.append(tuple(current))
+        
+        return waypoints
     def _is_path_clear(self, start, end, obstacles, clearance):
         """
         Check if straight path between start and end is clear of obstacles
