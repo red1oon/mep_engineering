@@ -284,7 +284,7 @@ This module follows [BlenderBIM best practices](https://docs.bonsaibim.org/):
 ## 🧪 Testing
 
 Validated on real-world project:
-- **Project**: Terminal 1/2 Airport Expansion
+- **Project**: Terminal 1/2 Jetty Complex Expansion
 - **Scale**: 7 disciplines, 93,000 elements, 302MB
 - **Results**: 67 clashes detected correctly, grouped by discipline
 - **Performance**: 30 seconds, 2GB RAM
