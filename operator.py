@@ -115,7 +115,26 @@ class RouteMEPConduit(Operator):
         
         # Extract obstacle bboxes for pathfinding
         obstacle_bboxes = [obs.bbox for obs in obstacles]
+
+        # DEBUG: Analyze obstacles near start point
+        print(f"\n  Analyzing obstacles near start point {start}:")
+        start_distances = []
+        for obs in obstacles[:10]:  # Check first 10
+            bbox = obs.bbox
+            min_x, min_y, min_z, max_x, max_y, max_z = bbox
+            center = ((min_x + max_x)/2, (min_y + max_y)/2, (min_z + max_z)/2)
+            dist = math.sqrt(sum((s - c)**2 for s, c in zip(start, center)))
+            size = (max_x - min_x, max_y - min_y, max_z - min_z)
+            start_distances.append((dist, center, size))
         
+        start_distances.sort(key=lambda x: x[0])
+        for i, (dist, center, size) in enumerate(start_distances[:5]):
+            print(f"    #{i+1}: {dist:.2f}m away, size: {size[0]:.1f}×{size[1]:.1f}×{size[2]:.1f}m")
+        
+        # Check clearance value
+        print(f"\n  Clearance requirement: {clearance}m")
+        print(f"  Search radius for clear space: {clearance * 1.5:.2f}m")
+
         # Run pathfinding
         try:
             waypoints = self._route_orthogonal(start, end, obstacle_bboxes, clearance)
@@ -151,62 +170,207 @@ class RouteMEPConduit(Operator):
     
     def _route_orthogonal(self, start, end, obstacles, clearance):
         """
-        Manhattan-style orthogonal pathfinding
-        Tries 6 different axis permutations (XYZ, XZY, YXZ, YZX, ZXY, ZYX)
-        Returns first path that clears obstacles, or None if all blocked
-        """
-        from itertools import permutations
+        RRT-based pathfinding with orthogonal bias
+        Handles dense obstacle fields (70+ obstacles in 10m corridor)
         
-        # Try direct path first (fastest)
+        Args:
+            start: (x, y, z) starting point in meters
+            end: (x, y, z) ending point in meters
+            obstacles: List of bbox tuples (min_x, min_y, min_z, max_x, max_y, max_z)
+            clearance: Minimum clearance from obstacles in meters
+        
+        Returns:
+            List of waypoints [(x,y,z), ...] or None if no path found
+        """
+        # Note: Start/end are connection points (can be near obstacles)
+        # Only the path BETWEEN them needs clearance
+        print(f"  ℹ️  Start/end are connection points (clearance not required)")
+        import random
+        import math
+        
+        # RRT Parameters
+        MAX_ITERATIONS = 5000
+        STEP_SIZE = 0.3  # Smaller steps for dense field
+        GOAL_SAMPLE_RATE = 0.3  # Sample goal more often
+        GOAL_THRESHOLD = 0.5  # 0.5m proximity to goal = success
+        
+        # Try simple direct path first (fast path)
         if self._is_path_clear(start, end, obstacles, clearance):
             return [start, end]
         
-        # Define axis indices: 0=X, 1=Y, 2=Z
-        axes = [0, 1, 2]
+        # Initialize RRT tree
+        tree = {0: {'point': start, 'parent': None}}
+        node_count = 1
         
-        # Try all 6 axis permutations
-        for axis_order in permutations(axes):
-            waypoints = self._generate_orthogonal_path(start, end, axis_order)
+        # Calculate search bounds (limit exploration area)
+        bounds = self._calculate_search_bounds(start, end, clearance * 3)
+        
+        # RRT main loop
+        for iteration in range(MAX_ITERATIONS):
+            # Sample random point (or goal)
+            if random.random() < GOAL_SAMPLE_RATE:
+                rand_point = end
+            else:
+                rand_point = self._sample_random_point(bounds)
             
-            # Validate all segments clear
-            path_clear = True
-            for i in range(len(waypoints) - 1):
-                if not self._is_path_clear(waypoints[i], waypoints[i+1], obstacles, clearance):
-                    path_clear = False
-                    break
+            # Find nearest node in tree
+            nearest_idx = self._find_nearest_node(tree, rand_point)
+            nearest_point = tree[nearest_idx]['point']
             
-            if path_clear:
-                return waypoints
+            # Steer toward random point (limited by STEP_SIZE)
+            new_point = self._steer(nearest_point, rand_point, STEP_SIZE)
+            
+            # Apply orthogonal bias (snap to nearest axis-aligned direction)
+            new_point = self._apply_orthogonal_bias(nearest_point, new_point)
+            
+            # Check if path to new point is collision-free
+            if self._is_path_clear(nearest_point, new_point, obstacles, clearance):
+                # Add to tree
+                tree[node_count] = {'point': new_point, 'parent': nearest_idx}
+                
+                # Check if reached goal
+                distance_to_goal = self._distance(new_point, end)
+                if distance_to_goal < GOAL_THRESHOLD:
+                    # Goal reached! Extract path
+                    path = self._extract_path(tree, node_count, end)
+                    
+                    # Simplify path (remove redundant waypoints)
+                    simplified_path = self._simplify_path(path, obstacles, clearance)
+                    
+                    return simplified_path
+                
+                node_count += 1
+            
+            # Progress indicator every 500 iterations
+            if iteration > 0 and iteration % 500 == 0:
+                print(f"  RRT: {iteration} iterations, {node_count} nodes, "
+                    f"closest: {self._distance(new_point, end):.1f}m")
         
-        # All permutations blocked - try with vertical offset
-        offset = clearance * 2.0
-        for sign in [1, -1]:  # Try both up and down
-            for axis_order in permutations(axes):
-                # Create intermediate point with vertical offset
-                mid_point = list(start)
-                mid_point[2] += sign * offset  # Offset in Z
-                mid_point = tuple(mid_point)
-                
-                # Try path: start -> mid_point -> end
-                waypoints = [start, mid_point]
-                
-                # Generate path from mid_point to end
-                remaining_path = self._generate_orthogonal_path(mid_point, end, axis_order)
-                waypoints.extend(remaining_path[1:])  # Skip duplicate mid_point
-                
-                # Validate segments
-                path_clear = True
-                for i in range(len(waypoints) - 1):
-                    if not self._is_path_clear(waypoints[i], waypoints[i+1], obstacles, clearance):
-                        path_clear = False
-                        break
-                
-                if path_clear:
-                    return waypoints
-        
-        # No valid path found
+        # Failed to find path
+        print(f"âš  RRT failed after {MAX_ITERATIONS} iterations")
         return None
     
+    def _calculate_search_bounds(self, start, end, buffer):
+        """Calculate bounding box for RRT search space"""
+        min_x = min(start[0], end[0]) - buffer
+        max_x = max(start[0], end[0]) + buffer
+        min_y = min(start[1], end[1]) - buffer
+        max_y = max(start[1], end[1]) + buffer
+        min_z = min(start[2], end[2]) - buffer
+        max_z = max(start[2], end[2]) + buffer
+        return (min_x, min_y, min_z, max_x, max_y, max_z)
+
+    def _sample_random_point(self, bounds):
+        """Sample random point within search bounds"""
+        import random
+        min_x, min_y, min_z, max_x, max_y, max_z = bounds
+        return (
+            random.uniform(min_x, max_x),
+            random.uniform(min_y, max_y),
+            random.uniform(min_z, max_z)
+        )
+
+    def _distance(self, p1, p2):
+        """Euclidean distance between two 3D points"""
+        import math
+        return math.sqrt(sum((a - b)**2 for a, b in zip(p1, p2)))
+
+    def _steer(self, from_point, to_point, max_step):
+        """Steer from one point toward another, limited by max_step"""
+        import math
+        
+        # Calculate direction vector
+        dx = to_point[0] - from_point[0]
+        dy = to_point[1] - from_point[1]
+        dz = to_point[2] - from_point[2]
+        
+        distance = math.sqrt(dx**2 + dy**2 + dz**2)
+        
+        # If within step size, return target
+        if distance <= max_step:
+            return to_point
+        
+        # Otherwise, move max_step in direction
+        ratio = max_step / distance
+        return (
+            from_point[0] + dx * ratio,
+            from_point[1] + dy * ratio,
+            from_point[2] + dz * ratio
+        )
+
+    def _apply_orthogonal_bias(self, from_point, to_point):
+        """
+        Bias path toward orthogonal directions (80% chance)
+        Allows diagonal movement 20% of time for dense obstacles
+        """
+        import random
+        
+        # 20% chance: allow diagonal movement
+        if random.random() < 0.2:
+            return to_point
+        
+        # 80% chance: snap to axis-aligned movement
+        dx = abs(to_point[0] - from_point[0])
+        dy = abs(to_point[1] - from_point[1])
+        dz = abs(to_point[2] - from_point[2])
+        
+        # Find dominant axis
+        if dx >= dy and dx >= dz:
+            return (to_point[0], from_point[1], from_point[2])
+        elif dy >= dx and dy >= dz:
+            return (from_point[0], to_point[1], from_point[2])
+        else:
+            return (from_point[0], from_point[1], to_point[2])
+        
+    def _point_in_bbox(self, point, bbox, clearance):
+        """Check if point is within clearance distance of bbox"""
+        min_x, min_y, min_z, max_x, max_y, max_z = bbox
+        px, py, pz = point
+        
+        # Expand bbox by clearance
+        return (min_x - clearance <= px <= max_x + clearance and
+                min_y - clearance <= py <= max_y + clearance and
+                min_z - clearance <= pz <= max_z + clearance)
+
+    def _extract_path(self, tree, goal_idx, goal_point):
+        """Extract path from tree by backtracking from goal"""
+        path = [goal_point]
+        current_idx = goal_idx
+        
+        while tree[current_idx]['parent'] is not None:
+            current_idx = tree[current_idx]['parent']
+            path.append(tree[current_idx]['point'])
+        
+        return list(reversed(path))
+
+    def _simplify_path(self, path, obstacles, clearance):
+        """
+        Remove redundant waypoints using line-of-sight checks
+        Tries to connect non-adjacent waypoints directly
+        """
+        if len(path) <= 2:
+            return path
+        
+        simplified = [path[0]]
+        i = 0
+        
+        while i < len(path) - 1:
+            # Try to skip ahead as far as possible
+            j = len(path) - 1
+            while j > i + 1:
+                if self._is_path_clear(path[i], path[j], obstacles, clearance):
+                    # Can skip directly to path[j]
+                    simplified.append(path[j])
+                    i = j
+                    break
+                j -= 1
+            else:
+                # Couldn't skip, take next waypoint
+                simplified.append(path[i + 1])
+                i += 1
+        
+        return simplified
+
     def _generate_orthogonal_path(self, start, end, axis_order):
         """
         Generate orthogonal waypoints following specified axis order
