@@ -90,6 +90,22 @@ class BIM_PT_mep_engineering(Panel):
             box.label(text="⚠ Load Federation Index first", icon='ERROR')
 
         # ================================================================
+        # DEBUG TOOLS SECTION (NEW)
+        # ================================================================
+        layout.separator()
+        
+        box = layout.box()
+        box.label(text="Debug Tools", icon='VIEWZOOM')
+        
+        row = box.row(align=True)
+        row.enabled = fed_props.index_loaded
+        row.operator("bim.visualize_routing_obstacles", text="Visualize Obstacles", icon='HIDE_OFF')
+        row.operator("bim.clear_routing_debug", text="Clear", icon='X')
+        
+        if not fed_props.index_loaded:
+            box.label(text="⚠ Load Federation Index first", icon='ERROR')
+
+        # ================================================================
         # VALIDATION SECTION (Phase 2B)
         # ================================================================
         layout.separator()

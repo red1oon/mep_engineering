@@ -1,10 +1,11 @@
 # ============================================================================
-# FILE: operator.py
+# FILE: mep_engineering/operator.py
 # PURPOSE: Define operators (actions that users trigger)
 # ============================================================================
 
 import bpy
 from bpy.types import Operator
+from . import visualization
 
 class TestMEPOperator(Operator):
     """Test operator to verify MEP module is working"""
@@ -270,6 +271,28 @@ class RouteMEPConduit(Operator):
             random.uniform(min_z, max_z)
         )
 
+    def _find_nearest_node(self, tree, target_point):
+        """
+        Find nearest node in tree to target point
+        
+        Args:
+            tree: Dictionary {index: {'point': (x,y,z), 'parent': idx}}
+            target_point: Target (x, y, z) coordinate
+            
+        Returns:
+            Index of nearest node in tree
+        """
+        min_distance = float('inf')
+        nearest_idx = 0
+        
+        for idx, node in tree.items():
+            distance = self._distance(node['point'], target_point)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_idx = idx
+        
+        return nearest_idx
+    
     def _distance(self, p1, p2):
         """Euclidean distance between two 3D points"""
         import math
@@ -827,3 +850,101 @@ class SetRouteEndPoint(Operator):
                    f"End point set to ({cursor_loc.x:.2f}, {cursor_loc.y:.2f}, {cursor_loc.z:.2f})m")
         
         return {"FINISHED"}  
+    
+# ============================================================================
+# VISUALIZATION OPERATORS (Debug Tools)
+# ============================================================================
+
+class VisualizeRoutingObstacles(Operator):
+    """Visualize routing obstacles in 3D viewport"""
+    bl_idname = "bim.visualize_routing_obstacles"
+    bl_label = "Visualize Obstacles"
+    bl_description = "Show start/end points, obstacles, and clearance zones in 3D viewport"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        mep_props = context.scene.BIMmepEngineeringProperties
+        fed_props = context.scene.BIMFederationProperties
+        
+        # Validate federation is loaded
+        if not fed_props.index_loaded:
+            self.report({'ERROR'}, "Federation index not loaded. Load federation first.")
+            return {"CANCELLED"}
+        
+        # Get start/end points
+        start = tuple(mep_props.route_start_point)
+        end = tuple(mep_props.route_end_point)
+        clearance = mep_props.clearance_distance
+        
+        # Validate points are set
+        if start == (0.0, 0.0, 0.0) or end == (0.0, 0.0, 0.0):
+            self.report({'ERROR'}, "Set start and end points first")
+            return {"CANCELLED"}
+        
+        # Get federation index
+        if not hasattr(bpy.types.WindowManager, 'federation_index'):
+            self.report({'ERROR'}, "Federation index not found in memory")
+            return {"CANCELLED"}
+        
+        index = bpy.types.WindowManager.federation_index
+        
+        # Query obstacles along corridor
+        try:
+            disciplines = [d.strip() for d in mep_props.target_disciplines.split(',') if d.strip()]
+            
+            obstacles = index.query_corridor(
+                start=start,
+                end=end,
+                buffer=clearance,
+                disciplines=disciplines if disciplines else None
+            )
+            
+            self.report({'INFO'}, f"Found {len(obstacles)} obstacles")
+            
+            # Convert FederationElement to bbox tuples
+            obstacle_bboxes = [obs.bbox for obs in obstacles]
+            
+            # Clear previous visualization
+            visualization.clear_debug_objects()
+            
+            # Create visualization
+            created = visualization.visualize_routing_scenario(
+                start=start,
+                end=end,
+                obstacles=obstacle_bboxes,
+                clearance=clearance,
+                show_clearance_zones=True,
+                show_corridor=True
+            )
+            
+            # Navigate camera to view the scene
+            midpoint = (
+                (start[0] + end[0]) / 2,
+                (start[1] + end[1]) / 2,
+                (start[2] + end[2]) / 2
+            )
+            visualization.navigate_to_view(midpoint, distance=15.0)
+            
+            self.report({'INFO'}, 
+                       f"✓ Visualization created: {len(obstacles)} obstacles shown")
+            
+        except Exception as e:
+            self.report({'ERROR'}, f"Visualization failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {"CANCELLED"}
+        
+        return {"FINISHED"}
+
+
+class ClearRoutingDebug(Operator):
+    """Clear all routing debug objects"""
+    bl_idname = "bim.clear_routing_debug"
+    bl_label = "Clear Debug"
+    bl_description = "Remove all MEP debug visualization objects from scene"
+    bl_options = {"REGISTER", "UNDO"}
+    
+    def execute(self, context):
+        visualization.clear_debug_objects()
+        self.report({'INFO'}, "Debug objects cleared")
+        return {"FINISHED"}

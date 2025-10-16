@@ -19,6 +19,8 @@ classes = (
     operator.SetRouteStartPoint,
     operator.SetRouteEndPoint,
     operator.ValidateConduitRoute,
+    operator.VisualizeRoutingObstacles,  # ← NEW LINE
+    operator.ClearRoutingDebug,          # ← NEW LINE
     ui.BIM_PT_mep_engineering,
 )
 
