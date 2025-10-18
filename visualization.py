@@ -112,9 +112,25 @@ def create_obstacle_box(
     obj.scale = (width / 2, depth / 2, height / 2)
     
     # Create and assign material
+    # Create and assign material with emission
     mat = bpy.data.materials.new(name=f"MEP Debug Material {name}")
-    mat.diffuse_color = color
-    mat.use_nodes = False
+    mat.use_nodes = True  # Enable nodes for emission
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    # Clear default nodes
+    nodes.clear()
+
+    # Add shader nodes
+    output = nodes.new('ShaderNodeOutputMaterial')
+    emission = nodes.new('ShaderNodeEmission')
+
+    # Set emission color and strength
+    emission.inputs['Color'].default_value = color
+    emission.inputs['Strength'].default_value = 5.0  # Bright glow
+
+    # Connect emission to output
+    links.new(emission.outputs['Emission'], output.inputs['Surface'])
     
     if color[3] < 1.0 or wireframe:  # Transparent or wireframe
         mat.blend_method = 'OPAQUE'
@@ -345,7 +361,7 @@ def visualize_routing_scenario(
     # Start point (green sphere)
     created_objects['start'] = create_debug_sphere(
         start,
-        radius=0.2,
+        radius=0.5,
         color=(0.0, 1.0, 0.0, 1.0),  # Green
         name="Start Point"
     )
@@ -353,7 +369,7 @@ def visualize_routing_scenario(
     # End point (red sphere)
     created_objects['end'] = create_debug_sphere(
         end,
-        radius=0.2,
+        radius=0.5,
         color=(1.0, 0.0, 0.0, 1.0),  # Red
         name="End Point"
     )
@@ -375,6 +391,7 @@ def visualize_routing_scenario(
             bbox,
             color=(1.0, 0.0, 0.0, 0.3),  # Red, 30% opacity
             name=f"Obstacle {i+1}"
+            wireframe=True
         )
         created_objects['obstacles'].append(obs_obj)
         

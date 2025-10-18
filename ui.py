@@ -99,7 +99,7 @@ class BIM_PT_mep_engineering(Panel):
         
         row = box.row(align=True)
         row.enabled = fed_props.index_loaded
-        row.operator("bim.visualize_routing_obstacles", text="Visualize Obstacles", icon='HIDE_OFF')
+        row.operator("bim.visualize_routing_obstacles", text="Visualize Conduit", icon='HIDE_OFF')
         row.operator("bim.clear_routing_debug", text="Clear", icon='X')
         
         if not fed_props.index_loaded:
