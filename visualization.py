@@ -390,7 +390,7 @@ def visualize_routing_scenario(
         obs_obj = create_obstacle_box(
             bbox,
             color=(1.0, 0.0, 0.0, 0.3),  # Red, 30% opacity
-            name=f"Obstacle {i+1}"
+            name=f"Obstacle {i+1}",
             wireframe=True
         )
         created_objects['obstacles'].append(obs_obj)
