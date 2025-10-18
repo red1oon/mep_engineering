@@ -145,21 +145,30 @@ class RouteMEPConduit(Operator):
                 return {"CANCELLED"}
             
             self.report({'INFO'}, f"Route found with {len(waypoints)} waypoints")
-            
+
             # Debug output
             print(f"Waypoints ({len(waypoints)}):")
             for i, wp in enumerate(waypoints):
                 print(f"  {i}: ({wp[0]:.2f}, {wp[1]:.2f}, {wp[2]:.2f})")
-            
+
+            # Auto-clear old visualization before storing new route
+            from . import visualization
+            visualization.clear_debug_objects()
+
+            # Store waypoints for visualization
+            import json
+            context.scene["MEP_last_route_waypoints"] = json.dumps(waypoints)
+            print("✓ Waypoints stored for visualization")
+
             # Generate IFC geometry
             diameter = mep_props.conduit_diameter
             success = self._generate_conduit_ifc(waypoints, diameter)
-            
+
             if not success:
                 self.report({'ERROR'}, "Failed to generate IFC geometry")
                 return {"CANCELLED"}
-            
-            self.report({'INFO'}, f"✓ Conduit route complete! Created {len(waypoints)-1} segments.")
+
+            self.report({'INFO'}, f"✓ Conduit route complete! Created {len(waypoints)-1} segments. Click 'View Conduit Routing' to visualize.")
             
         except Exception as e:
             self.report({'ERROR'}, f"Pathfinding failed: {str(e)}")
@@ -858,7 +867,7 @@ class SetRouteEndPoint(Operator):
 class VisualizeRoutingObstacles(Operator):
     """Visualize routing obstacles in 3D viewport"""
     bl_idname = "bim.visualize_routing_obstacles"
-    bl_label = "Visualize Obstacles"
+    bl_label = "Visualize Conduit"
     bl_description = "Show start/end points, obstacles, and clearance zones in 3D viewport"
     bl_options = {"REGISTER", "UNDO"}
     
@@ -918,13 +927,23 @@ class VisualizeRoutingObstacles(Operator):
             )
             
             # Navigate camera to view the scene
+            # Select all debug objects for smooth zoom animation
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj_list in created.values():
+                if isinstance(obj_list, list):
+                    for obj in obj_list:
+                        if obj:
+                            obj.select_set(True)
+                elif obj_list:
+                    obj_list.select_set(True)
+            
+            # Navigate to view with smooth animation
             midpoint = (
                 (start[0] + end[0]) / 2,
                 (start[1] + end[1]) / 2,
                 (start[2] + end[2]) / 2
             )
-            visualization.navigate_to_view(midpoint, distance=15.0)
-            
+            visualization.navigate_to_view(midpoint)
             self.report({'INFO'}, 
                        f"✓ Visualization created: {len(obstacles)} obstacles shown")
             
@@ -945,6 +964,29 @@ class ClearRoutingDebug(Operator):
     bl_options = {"REGISTER", "UNDO"}
     
     def execute(self, context):
+        # Restore X-ray state before clearing objects
+        if "MEP_saved_xray_alpha" in context.scene:
+            saved_alpha = context.scene["MEP_saved_xray_alpha"]
+            
+            for area in context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    for space in area.spaces:
+                        if space.type == 'VIEW_3D':
+                            if saved_alpha < 0:
+                                # X-ray was off originally - turn it off
+                                space.shading.show_xray = False
+                                print("✓ X-ray mode: OFF (restored)")
+                            else:
+                                # Restore original alpha value
+                                space.shading.xray_alpha = saved_alpha
+                                print(f"✓ X-ray alpha restored to: {saved_alpha}")
+                            break
+                    break
+            
+            # Clean up saved state
+            del context.scene["MEP_saved_xray_alpha"]
+        
+        # Clear debug objects
         visualization.clear_debug_objects()
-        self.report({'INFO'}, "Debug objects cleared")
+        self.report({'INFO'}, "Debug objects cleared, X-ray restored")
         return {"FINISHED"}

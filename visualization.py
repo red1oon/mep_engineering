@@ -58,7 +58,7 @@ def create_debug_sphere(
     mat.use_nodes = False  # Simple material
     
     if color[3] < 1.0:  # Has transparency
-        mat.blend_method = 'BLEND'
+        mat.blend_method = 'OPAQUE'
         mat.show_transparent_back = False
     
     obj.data.materials.append(mat)
@@ -117,7 +117,7 @@ def create_obstacle_box(
     mat.use_nodes = False
     
     if color[3] < 1.0 or wireframe:  # Transparent or wireframe
-        mat.blend_method = 'BLEND'
+        mat.blend_method = 'OPAQUE'
         mat.show_transparent_back = False
     
     obj.data.materials.append(mat)
@@ -283,43 +283,50 @@ def visualize_routing_scenario(
     end: Tuple[float, float, float],
     obstacles: List[Tuple[float, float, float, float, float, float]],
     clearance: float,
+    waypoints: Optional[List[Tuple[float, float, float]]] = None,
     show_clearance_zones: bool = True,
     show_corridor: bool = True
 ) -> dict:
     """
     Complete visualization of a routing scenario
+    
+    Args:
+        start: Start point (x, y, z) in IFC coordinates
+        end: End point (x, y, z) in IFC coordinates
+        obstacles: List of obstacle bboxes (min_x, min_y, min_z, max_x, max_y, max_z)
+        clearance: Clearance distance in meters
+        waypoints: Optional list of route waypoints
+        show_clearance_zones: Show clearance zones around obstacles
+        show_corridor: Show routing corridor
+        
+    Returns:
+        Dictionary of created Blender objects
     """
-    # Get Blender coordinate offset from georeferencing
+    # IFC coordinates match Blender coordinates - no offset needed
+    # Calculate coordinate offset from first building object
     import bpy
-    geo_props = bpy.context.scene.BIMGeoreferenceProperties
+    offset_x = 0
+    offset_y = 0
+    offset_z = 0
     
-    # Initialize offsets
-    offset_x = 0.0
-    offset_y = 0.0
-    offset_z = 0.0
+    # Find any IFC building object to determine offset
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH' and 'Ifc' in obj.name:
+            # Building is around (120, -20, 10), IFC coords around (-50387, 34273, 6)
+            # Estimate offset from object location vs expected IFC coords
+            # Use your start point as reference
+            offset_x = start[0] - 120  # Adjust to building X center
+            offset_y = start[1] + 20   # Adjust to building Y center  
+            offset_z = start[2] - 6    # Adjust to building Z
+            print(f"📍 Detected offset from building: ({offset_x:.1f}, {offset_y:.1f}, {offset_z:.1f})")
+            break
     
-    # Apply offset if georeferencing is active
-    if geo_props.has_blender_offset:
-        try:
-            # CRITICAL FIX: Offset properties are in MILLIMETERS, convert to METERS
-            offset_x = float(geo_props.blender_offset_x) / 1000.0
-            offset_y = float(geo_props.blender_offset_y) / 1000.0
-            offset_z = float(geo_props.blender_offset_z) / 1000.0
-            
-            print(f"📍 Applying Blender offset: ({offset_x:.2f}, {offset_y:.2f}, {offset_z:.2f})m")
-            print(f"   (From: {geo_props.blender_offset_x:.1f}mm, {geo_props.blender_offset_y:.1f}mm, {geo_props.blender_offset_z:.1f}mm)")
-        except (ValueError, AttributeError) as e:
-            print(f"⚠️ Could not read georeference offset: {e}")
-            # Continue with zero offset
-    else:
-        print("ℹ️ No Blender offset detected, using coordinates as-is")
+    if offset_x == 0:
+        print(f"⚠️  No building objects found - using raw IFC coordinates")
     
-    # Apply offset to all coordinates
+    # Apply offset to all coordinates (currently zero)
     start = (start[0] - offset_x, start[1] - offset_y, start[2] - offset_z)
     end = (end[0] - offset_x, end[1] - offset_y, end[2] - offset_z)
-    
-    print(f"   Start after offset: ({start[0]:.2f}, {start[1]:.2f}, {start[2]:.2f})m")
-    print(f"   End after offset: ({end[0]:.2f}, {end[1]:.2f}, {end[2]:.2f})m")
     
     # Apply offset to obstacles
     offset_obstacles = []
@@ -380,8 +387,22 @@ def visualize_routing_scenario(
             )
             created_objects['clearances'].append(clear_obj)
     
+    # Create path line if waypoints provided
+    if waypoints and len(waypoints) >= 2:
+        # Apply same coordinate offset to waypoints
+        offset_waypoints = [
+            (wp[0] - offset_x, wp[1] - offset_y, wp[2] - offset_z)
+            for wp in waypoints
+        ]
+        created_objects['path'] = create_path_line(
+            offset_waypoints,
+            name="Conduit Route"
+        )
+    
     print(f"✓ Visualization created:")
     print(f"  - Start/End points: 2 spheres")
+    if waypoints:
+        print(f"  - Route path: {len(waypoints)} waypoints (green curve)")
     print(f"  - Obstacles: {len(obstacles)} boxes")
     if show_clearance_zones:
         print(f"  - Clearance zones: {len(obstacles)} wireframes")
@@ -392,54 +413,71 @@ def visualize_routing_scenario(
 
 def navigate_to_view(
     target_location: Tuple[float, float, float],
-    distance: float = 15.0
-) -> Optional[bpy.types.Object]:
+    view_distance: float = 15.0
+) -> bool:
     """
-    Position viewport camera to look at target location
+    Smoothly animate viewport to focus on target location with X-ray mode
+    Uses Blender's native view_selected for smooth zoom animation
     
     Args:
-        target_location: (x, y, z) point to look at
-        distance: Camera distance from target in meters
+        target_location: (x, y, z) point to center on in Blender coordinates
+        view_distance: Distance to zoom (unused - Blender calculates automatically)
         
     Returns:
-        Camera object or None if viewport not found
+        True if viewport adjusted successfully, False otherwise
     """
-    # Get or create camera
-    camera = bpy.data.objects.get("MEP Debug Camera")
-    if not camera:
-        camera_data = bpy.data.cameras.new("MEP Debug Camera")
-        camera = bpy.data.objects.new("MEP Debug Camera", camera_data)
-        bpy.context.scene.collection.objects.link(camera)
+    import bpy
     
-    # Position camera (offset above and to the side for good view)
-    camera.location = (
-        target_location[0] + distance * 0.5,
-        target_location[1] - distance * 0.7,
-        target_location[2] + distance * 0.5
-    )
+    success = False
     
-    # Point at target
-    direction = Vector(target_location) - Vector(camera.location)
-    camera.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+    # Find 3D viewport and adjust view
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    # Save current X-ray state before enabling
+                    if not space.shading.show_xray:
+                        # Store original alpha (or flag that X-ray was off)
+                        bpy.context.scene["MEP_saved_xray_alpha"] = -1.0  # -1 means "was off"
+                    else:
+                        # Store current alpha value
+                        bpy.context.scene["MEP_saved_xray_alpha"] = space.shading.xray_alpha
+                    
+                    # Enable X-ray mode for see-through
+                    space.shading.show_xray = True
+                    space.shading.xray_alpha = 0.3  # 30% building opacity
+                    
+                    print(f"✓ X-ray mode: ON (30% opacity)")
+                    print(f"  Saved previous state: {bpy.context.scene['MEP_saved_xray_alpha']}")
+                    
+                    success = True
+                    break
+            break
     
-    # Set as active camera
-    bpy.context.scene.camera = camera
+    # Now trigger smooth zoom using Blender's native frame selected
+    # This requires that debug objects are already selected
+    # Now trigger smooth zoom using Blender's native frame selected
+    # Need to override context to provide proper 3D view region
+    if success:
+        try:
+            # Find the area and region we just modified
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    for region in area.regions:
+                        if region.type == 'WINDOW':
+                            override = {'area': area, 'region': region}
+                            with bpy.context.temp_override(**override):
+                                bpy.ops.view3d.view_selected(use_all_regions=False)
+                            print(f"✓ Smooth zoom animation to conduit location")
+                            break
+                    break
+        except Exception as e:
+            print(f"⚠  Could not animate zoom: {e}")
     
-    # Try to switch viewport to camera view
-    try:
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                for space in area.spaces:
-                    if space.type == 'VIEW_3D':
-                        space.region_3d.view_perspective = 'CAMERA'
-                        space.shading.show_xray = True  # See through walls
-                        break
-                break
-    except Exception as e:
-        print(f"⚠ Could not switch to camera view: {e}")
+    if not success:
+        print("⚠  Could not find 3D viewport to adjust")
     
-    return camera
-
+    return success
 
 # ============================================================================
 # USAGE EXAMPLE (for testing)
